@@ -6,9 +6,10 @@ object m {
 
   def main(args: Array[String]) = {
     val p = Pipeline[Int]
-      .map(10) { s =>
-        Thread.sleep(5000)
-        s.toString
+      .map(10) { i =>
+        Thread.sleep(3000)
+        if (i == 5) throw new Exception
+        i.toString
       }
       .map { s =>
         s + "!"
@@ -70,17 +71,8 @@ package object pipeline {
     }
 
   }
-  class NilPipeline[I] extends Pipeline[I, I] {
-    def map[N](parallelism: Int)(f: I => N) : Pipeline[I, N] = {
-      Stage(List(Func(parallelism, f)))
-    }
-
-    def to(o: Output[I]) : Runner[I] = new Runner[I] {
-      def apply(v: I) = o(v)
-    }
-  }
   object Pipeline {
-    def apply[I]() : Pipeline[I, I] = new NilPipeline()
+    def apply[I]() : Pipeline[I, I] = new Stage(List())
   }
 
   trait Runner[I] {
@@ -180,6 +172,8 @@ package object pipeline {
         debug(s"out $v")
         out(v)
         before ! Pull()
+      case Error(e) =>
+        out.error(e)
     }
   }
 
@@ -227,9 +221,11 @@ package object pipeline {
         debug(s"done")
         before ! Pull()
         waiting += sender
-      case Value(v: In) =>
-        waiting.head ! Value(v)
+      case v: Value[In] =>
+        waiting.head ! v
         waiting = waiting.tail
+      case e: Error =>
+        after ! e
     }
 
     private[this] def pushWork() = {
@@ -275,22 +271,18 @@ package object pipeline {
 
   }
 
-  sealed trait Msg
-  case class AfterYou(a: ActorRef) extends Msg
-  object BeforeYou
-  object Start
+  case class Bind(stages: List[ActorRef])
 
   trait Content[C]
   case class Value[V](v: V) extends Content[V]
-  case class Error[E >: Exception](e: E) extends Content[E]
+  case class Error(e: Exception) extends Content[Exception] //TODO
 
   object Done
-  case class Work[V](v: V)
   object Free
   case class Pull(qty: Int = 1)
   case class Push(receiver: ActorRef)
 
-  case class Bind(stages: List[ActorRef])
+
 
 }
 
