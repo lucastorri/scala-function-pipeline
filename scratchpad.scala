@@ -5,30 +5,37 @@ object m {
   import pipeline._
 
   def main(args: Array[String]) = {
-    val p = Pipeline[Int].map(_.toString).map(_ + "!")
+    val p = Pipeline[Int]
+      .map(10) { s =>
+        Thread.sleep(5000)
+        s.toString
+      }
+      .map { s =>
+        s + "!"
+      }
     val o = new Output[String] {
       def apply(s: String) = println(s"chegou $s")
       def error(e: Exception) = e.printStackTrace()
     }
     val r = p.to(o)
-    (0 to 10).foreach(r.apply)
+    (0 until 10).foreach(r.apply)
   }
 }
 
 package object pipeline {
   val system = ActorSystem()
 
-  def debug(a: Any) = println(a)
+  def debug(a: Any) = {}//println(a)
 
   trait Pipeline[I, O] {
-    def map[N](parallelism: Int, f: O => N) : Pipeline[I, N]
-    def map[N](f: O => N) : Pipeline[I, N] = map(1, f)
+    def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
+    def map[N](f: O => N) : Pipeline[I, N] = map(1)(f)
 
     def to(o: Output[O]) : Runner[I]
   }
   case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
 
-    def map[N](parallelism: Int, f: O => N) : Pipeline[I, N] = {
+    def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N] = {
       Stage(Func(parallelism, f) :: stages)
     }
 
@@ -64,7 +71,7 @@ package object pipeline {
 
   }
   class NilPipeline[I] extends Pipeline[I, I] {
-    def map[N](parallelism: Int, f: I => N) : Pipeline[I, N] = {
+    def map[N](parallelism: Int)(f: I => N) : Pipeline[I, N] = {
       Stage(List(Func(parallelism, f)))
     }
 
@@ -137,10 +144,8 @@ package object pipeline {
     }
 
     def pushValues() {
-      debug("push start", next, values)
       if (next > 0 && values.nonEmpty) {
         val push = math.min(next, values.size)
-        debug(s"push start $push")
         values.take(push).foreach(after ! _)
         values = values.drop(push)
         next -= push
@@ -188,8 +193,8 @@ package object pipeline {
 
     private[this] var before : ActorRef = _
     private[this] var after : ActorRef = _
-    private[this] var waiting = List.empty[ActorRef]
-    private[this] var finished = List.empty[ActorRef]
+    private[this] var waiting = mutable.ListBuffer.empty[ActorRef]
+    private[this] var finished = mutable.ListBuffer.empty[ActorRef]
     private[this] var next = 0
 
     import context._
@@ -200,7 +205,7 @@ package object pipeline {
         before = sender
         after = stages.head
         after ! Bind(stages.tail)
-        waiting = List.fill(parallelism)(actorOf(Props(creator = () => new Worker {
+        waiting = mutable.ListBuffer.fill(parallelism)(actorOf(Props(creator = () => new Worker {
           type In = Supervisor.this.In
           type Out = Supervisor.this.Out
           val f = Supervisor.this.f
@@ -216,24 +221,20 @@ package object pipeline {
         pushWork()
       case Free =>
         debug(s"free")
-        finished ::= sender
+        finished += sender
         pushWork()
       case Done =>
         debug(s"done")
         before ! Pull()
-        waiting ::= sender
+        waiting += sender
       case Value(v: In) =>
-        debug(s"value $v", waiting)
         waiting.head ! Value(v)
         waiting = waiting.tail
-        debug(s"value $v", waiting)
     }
 
     private[this] def pushWork() = {
-      debug(finished, next)
       if (finished.nonEmpty && next > 0) {
         val push = math.min(finished.size, next)
-        debug(s"push $push")
         finished.take(push).foreach(_ ! Push(after))
         finished = finished.drop(push)
         next -= push
