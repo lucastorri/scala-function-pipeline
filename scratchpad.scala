@@ -1,5 +1,7 @@
 import akka.actor.{Props, ActorSystem, ActorRef, Actor}
+import concurrent.{Future, Promise}
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object m {
   import pipeline._
@@ -20,6 +22,10 @@ object m {
     }
     val r = p.to(o)
     (0 until 10).foreach(r.apply)
+
+    val f: Future[String] = r.pipe(100)
+
+    f.onSuccess { case v => println(s"success $v") }
   }
 }
 
@@ -32,7 +38,7 @@ package object pipeline {
     def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
     def map[N](f: O => N) : Pipeline[I, N] = map(1)(f)
 
-    def to(o: Output[O]) : Runner[I]
+    def to(o: Output[O]) : Runner[I, O]
   }
   case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
 
@@ -40,7 +46,7 @@ package object pipeline {
       Stage(Func(parallelism, f) :: stages)
     }
 
-    def to(output: Output[O]) : Runner[I] = new Runner[I] {
+    def to(output: Output[O]) : Runner[I, O] = new Runner[I, O] {
       private[this] val start : ActorRef = {
         val start : ActorRef = system.actorOf(Props(creator = () => new Start {
           type In = I
@@ -66,7 +72,13 @@ package object pipeline {
       }
 
       def apply(v: I) = {
-        start ! v
+        start ! Value(v)
+      }
+
+      def pipe(v: I) = {
+        val promise = Promise[O]()
+        start ! TracedValue(v, v, promise)
+        promise.future
       }
     }
 
@@ -75,8 +87,9 @@ package object pipeline {
     def apply[I]() : Pipeline[I, I] = new Stage(List())
   }
 
-  trait Runner[I] {
+  trait Runner[I, O] {
     def apply(v: I)
+    def pipe(i: I) : Future[O]
   }
 
   trait Func {
@@ -111,7 +124,7 @@ package object pipeline {
 
     type In
     private[this] var after: ActorRef = _
-    private[this] var values = mutable.ListBuffer.empty[Value[In]]
+    private[this] var values = mutable.ListBuffer.empty[Content[In]]
     private[this] var next = 0
 
     import context._
@@ -129,9 +142,9 @@ package object pipeline {
         debug(s"next start $qty")
         next += qty
         pushValues()
-      case v: In =>
+      case v: Content[In] =>
         debug(s"in $v")
-        values += Value(v)
+        values += v
         pushValues()
     }
 
@@ -172,8 +185,15 @@ package object pipeline {
         debug(s"out $v")
         out(v)
         before ! Pull()
+      case TracedValue(v: Out, original, output) =>
+        debug(s"traced $v")
+        output.success(v)
+        before ! Pull()
       case Error(e) =>
         out.error(e)
+        before ! Pull()
+      case TracedError(e, original) =>
+        ()
     }
   }
 
@@ -221,11 +241,9 @@ package object pipeline {
         debug(s"done")
         before ! Pull()
         waiting += sender
-      case v: Value[In] =>
-        waiting.head ! v
+      case c: Content[In] =>
+        waiting.head ! c
         waiting = waiting.tail
-      case e: Error =>
-        after ! e
     }
 
     private[this] def pushWork() = {
@@ -250,12 +268,9 @@ package object pipeline {
     def receive = free
 
     def free : Receive = {
-      case Value(v: In) =>
-        debug(s"work $v")
-        result =
-          try Value(f(v))
-          catch { case e: Exception => e.printStackTrace; Error(e) }
-
+      case c: Content[In] =>
+        debug(s"work $c")
+        result = c.map(f)
         sender ! Free
         become(finished)
     }
@@ -273,16 +288,37 @@ package object pipeline {
 
   case class Bind(stages: List[ActorRef])
 
-  trait Content[C]
-  case class Value[V](v: V) extends Content[V]
-  case class Error(e: Exception) extends Content[Exception] //TODO
+  sealed trait Content[+C] {
+    def map[N](f: C => N) : Content[N]
+  }
+  case class Value[V](v: V) extends Content[V] {
+    def map[N](f: V => N) : Content[N] =
+      try Value(f(v)) catch { case e: Exception => Error(e) }
+  }
+  case class Error(e: Exception) extends Content[Nothing] {
+    def map[N](f: Nothing => N) : Content[N] = this
+  }
+  case class TracedValue[V, I, O](v: V, original: I, output: Promise[O]) extends Content[V] {
+    def map[N](f: V => N) : Content[N] =
+      try TracedValue(f(v), original, output)
+      catch {
+        case e: Exception =>
+          output.failure(e)
+          TracedError(e, original)
+      }
+  }
+  case class TracedError[I](e: Exception, original: I) extends Content[Nothing] {
+    def map[N](f: Nothing => N) : Content[N] = this
+  }
 
   object Done
   object Free
-  case class Pull(qty: Int = 1)
+  case class Pull(qty: Int)
+  object Pull1 extends Pull(1)
+  object Pull {
+    def apply() : Pull = Pull1
+  }
   case class Push(receiver: ActorRef)
-
-
 
 }
 
