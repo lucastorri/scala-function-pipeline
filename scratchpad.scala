@@ -20,11 +20,11 @@ object m {
       def apply(s: String) = println(s"chegou $s")
       def error(e: Exception) = e.printStackTrace()
     }
-    val r = p.to(o)
-    (0 until 10).foreach(r.apply)
+    val cr = p.pipe(o)
+    (0 until 10).foreach(cr.apply)
 
-    val f: Future[String] = r.pipe(100)
-
+    val fr = p.pipe
+    val f = fr(100)
     f.onSuccess { case v => println(s"success $v") }
   }
 }
@@ -38,7 +38,8 @@ package object pipeline {
     def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
     def map[N](f: O => N) : Pipeline[I, N] = map(1)(f)
 
-    def to(o: Output[O]) : Runner[I, O]
+    def pipe() : FutureRunner[I, O]
+    def pipe(o: Output[O]) : CallbackRunner[I, O]
   }
   case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
 
@@ -46,40 +47,46 @@ package object pipeline {
       Stage(Func(parallelism, f) :: stages)
     }
 
-    def to(output: Output[O]) : Runner[I, O] = new Runner[I, O] {
-      private[this] val start : ActorRef = {
-        val start : ActorRef = system.actorOf(Props(creator = () => new Start {
-          type In = I
-        }))
-
-        val end : ActorRef = system.actorOf(Props(creator = () => new End {
-          type Out = O
-        }))
-
-        def supervisor(func: Func) : ActorRef = system.actorOf(Props(creator = () => new Supervisor {
-          def parallelism: Int = func.p
-
-          def f = func.f.asInstanceOf[In => Out]
-
-          type In = func.In
-          type Out = func.Out
-        }))
-
-        val actors : List[ActorRef] = (end :: stages.map(supervisor)).reverse
-        end ! output
-        start ! Bind(actors)
-        start
-      }
+    def pipe() : FutureRunner[I, O] = new FutureRunner[I, O] {
+      private[this] val start = runner(Output.noop[O])
 
       def apply(v: I) = {
-        start ! Value(v)
-      }
-
-      def pipe(v: I) = {
         val promise = Promise[O]()
         start ! TracedValue(v, v, promise)
         promise.future
       }
+    }
+
+    def pipe(output: Output[O]) : CallbackRunner[I, O] = new CallbackRunner[I, O] {
+      private[this] val start = runner(output)
+
+      def apply(v: I) = {
+        start ! Value(v)
+      }
+    }
+
+    private[this] def runner(output: Output[O]) : ActorRef = {
+      val start : ActorRef = system.actorOf(Props(creator = () => new Start {
+        type In = I
+      }))
+
+      val end : ActorRef = system.actorOf(Props(creator = () => new End {
+        type Out = O
+      }))
+
+      def supervisor(func: Func) : ActorRef = system.actorOf(Props(creator = () => new Supervisor {
+        def parallelism: Int = func.p
+
+        def f = func.f.asInstanceOf[In => Out]
+
+        type In = func.In
+        type Out = func.Out
+      }))
+
+      val actors : List[ActorRef] = (end :: stages.map(supervisor)).reverse
+      end ! output
+      start ! Bind(actors)
+      start
     }
 
   }
@@ -87,9 +94,11 @@ package object pipeline {
     def apply[I]() : Pipeline[I, I] = new Stage(List())
   }
 
-  trait Runner[I, O] {
+  trait CallbackRunner[I, O] {
     def apply(v: I)
-    def pipe(i: I) : Future[O]
+  }
+  trait FutureRunner[I, O] {
+    def apply(i: I) : Future[O]
   }
 
   trait Func {
