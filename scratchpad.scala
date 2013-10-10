@@ -21,7 +21,7 @@ object m {
       def error(e: Exception) = e.printStackTrace()
     }
     val cr = p.pipe(o)
-    (0 until 10).foreach(cr.apply)
+    (0 until 50).foreach(cr.apply)
 
     val fr = p.pipe
     val f = fr(100)
@@ -134,7 +134,7 @@ package object pipeline {
     type In
     private[this] var after: ActorRef = _
     private[this] var values = mutable.ListBuffer.empty[Content[In]]
-    private[this] var next = 0
+    private[this] var tokens = 0
 
     import context._
 
@@ -149,7 +149,7 @@ package object pipeline {
     def up : Receive = {
       case Pull(qty) =>
         debug(s"next start $qty")
-        next += qty
+        tokens += qty
         pushValues()
       case v: Content[In] =>
         debug(s"in $v")
@@ -158,11 +158,11 @@ package object pipeline {
     }
 
     def pushValues() {
-      if (next > 0 && values.nonEmpty) {
-        val push = math.min(next, values.size)
+      if (tokens > 0 && values.nonEmpty) {
+        val push = math.min(tokens, values.size)
         values.take(push).foreach(after ! _)
         values = values.drop(push)
-        next -= push
+        tokens -= push
       }
     }
   }
@@ -218,7 +218,7 @@ package object pipeline {
     private[this] var after : ActorRef = _
     private[this] var waiting = mutable.ListBuffer.empty[ActorRef]
     private[this] var finished = mutable.ListBuffer.empty[ActorRef]
-    private[this] var next = 0
+    private[this] var tokens = 0
 
     import context._
 
@@ -240,7 +240,7 @@ package object pipeline {
     def free : Receive = {
       case Pull(qty) =>
         debug(s"next $qty")
-        next += qty
+        tokens += qty
         pushWork()
       case Free =>
         debug(s"free")
@@ -256,11 +256,11 @@ package object pipeline {
     }
 
     private[this] def pushWork() = {
-      if (finished.nonEmpty && next > 0) {
-        val push = math.min(finished.size, next)
+      if (finished.nonEmpty && tokens > 0) {
+        val push = math.min(finished.size, tokens)
         finished.take(push).foreach(_ ! Push(after))
         finished = finished.drop(push)
-        next -= push
+        tokens -= push
       }
     }
 
