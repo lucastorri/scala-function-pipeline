@@ -142,3 +142,12 @@ Now, let's reuse the example where step **#2** might be slow and we increase the
 Although the table above might not make it clear, but since F1 and F3 are quite quick steps, you end up having 5 Out's almost the same time. 
 
 The final order might not be the same as the input, as each F2 instance might receive more CPU time than the other.
+
+
+## How it works
+
+Every function is mapped to a different actor, called a Supervisor. They are linked to each other pretty much like a double linked list, where one actor knows who is before and after him. There are also two extra actors in the front of the pipeline (Start), that queus all the values received for processing, and another at the end (End), for passing the results back to the client. Each Supervisor has 1 to N Workers, where N is the parallelism level set to that particular function.
+
+Supervisors pull work from the previous function. For instance, F2 will send a pull message to F1. When the pipeline starts, he issues N pulls. The F1 Supervisor keeps a count of how many pulls have been issued by F2, or on the internal parlance, how many tokens he has left.
+
+Once F1 has any value ready, it pushes it to the F2 Supervisor, that than forwards it to the next free Worker. Once the Worker has finished executing the function, it notifies the Supervisor, so it can coordinate with the next Supervisor in the Pipeline. Once he has tokens left, he pushes the value to next Supervisor and pulls another value from the previous one.
