@@ -27,8 +27,9 @@ object FullExample {
     val websites = Seq(
       "http://www.nokia.com/",
       "http://www.google.com/",
-      "http://www.github.com/",
       "http://www.twitter.com/",
+      "http://facebook.com",
+      "http://www.github.com/",
       "http://www.scala-lang.org/",
       "http://www.oracle.com/",
       "http://www.amazon.com/"
@@ -36,12 +37,8 @@ object FullExample {
 
     val content : Pipeline[String, WebsiteContent] = Pipeline[String]
       .mapM(4) { url =>
-        try {
-          (url, Source.fromURL(url).size)
-        } catch {
-          case e: Exception =>
-            (url, 0)
-        }
+        try (url, Source.fromURL(url).size)
+        catch { case e: Exception => (url, 0) }
       }
       .map { case (url, content) =>
         WebsiteContent(url, content)

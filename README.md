@@ -56,11 +56,11 @@ What this library enables you to do is to fine tune each step and define a paral
 ```
 val p = Pipeline[Int]
   .map { _.toString }
-  .map(5) { s => Thread.sleep(3000); s + "!" }
+  .mapM(5) { s => Thread.sleep(3000); s + "!" }
   .map { "hi #" + _ }
 ```
 
-As you can see, the code is quite similar in order to define the pipeline. Only a small change has been introduced on step **#2** to define it as parallelism level 5. Realize that we don't say 5 threads here, as underneath we use 5 [Akka](http://akka.io) actors, that might be or not mapped to 5 different threads.
+As you can see, the code is quite similar in order to define the pipeline. Only a small change has been introduced on step **#2** to define it as parallelism level 5. Realise that we don't say 5 threads here, as underneath we use 5 [Akka](http://akka.io) actors, that might be or not mapped to 5 different threads.
 
 For running the pipeline, there are two possible ways:
 
@@ -80,6 +80,36 @@ val cr = p.pipe(new Output[String] {
 val fr = p.pipe
 val f = fr(100)
 f.onSuccess { case v => println(s"success $v") }
+```
+
+### Concatenating Pipelines
+
+```
+val p1 = Pipeline[String]
+  .mapM(4) { s =>
+    Thread.sleep(1000)
+    s"hi $s"
+  }
+
+val p2 = Pipeline[String]
+  .mapM(4) { s =>
+    Thread.sleep(1000)
+    s"bye $s"
+  }
+
+val p = Pipeline[Int]
+  .map { i =>
+    i.toString
+  }
+  .fork(4, p1, p2)
+  .map { case (str, hiStr, byeStr) =>
+  	println(str)
+  	println(hiStr)
+  	println(byeStr)
+  }
+  .pipe
+  
+List(1,2,3,4,5).foreach(p.apply)
 ```
 
 ## What happens
@@ -146,8 +176,14 @@ The final order might not be the same as the input, as each F2 instance might re
 
 ## How it works
 
-Every function is mapped to a different actor, called a Supervisor. They are linked to each other pretty much like a double linked list, where one actor knows who is before and after him. There are also two extra actors in the front of the pipeline (Start), that queus all the values received for processing, and another at the end (End), for passing the results back to the client. Each Supervisor has 1 to N Workers, where N is the parallelism level set to that particular function.
+Every function is mapped to a different actor, called a Supervisor. They are linked to each other pretty much like a double linked list, where one actor knows who is before and after him. There are also two extra actors in the front of the pipeline (Start), that queues all the values received for processing, and another at the end (End), for passing the results back to the client. Each Supervisor has 1 to N Workers, where N is the parallelism level set to that particular function.
 
 Supervisors pull work from the previous function. For instance, F2 will send a pull message to F1. When the pipeline starts, he issues N pulls. The F1 Supervisor keeps a count of how many pulls have been issued by F2, or on the internal parlance, how many tokens he has left.
 
 Once F1 has any value ready, it pushes it to the F2 Supervisor, that than forwards it to the next free Worker. Once the Worker has finished executing the function, it notifies the Supervisor, so it can coordinate with the next Supervisor in the Pipeline. Once he has tokens left, he pushes the value to next Supervisor and pulls another value from the previous one.
+
+
+## TODO
+
+* The workers could be mapped to remote actors using Akka, making it a distributed framework;
+* Each stage could monitor the time taken by each execution, how long does it waits to be passed to the next step, etc, so it could automatically adjust the parallelism level.
