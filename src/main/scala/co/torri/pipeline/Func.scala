@@ -1,14 +1,16 @@
 package co.torri.pipeline
 
+import concurrent.Future
+
 trait Func {
   type In
   type Out
 
   def p : Int
-  def f : In => Out
+  def f : In => Future[Out]
 }
 object Func {
-  def apply[I, O](parallelism: Int, ff: I => O) : Func = new Func {
+  def apply[I, O](parallelism: Int, ff: I => Future[O]) : Func = new Func {
     type In = I
     type Out = O
 

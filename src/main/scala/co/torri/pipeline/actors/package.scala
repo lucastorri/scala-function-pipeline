@@ -2,6 +2,8 @@ package co.torri.pipeline
 
 import akka.actor.{Props, ActorRef, Actor}
 import collection.mutable
+import concurrent.Future
+import util.{Failure, Success}
 
 package object actors {
 
@@ -78,19 +80,18 @@ package object actors {
     }
 
     def up : Receive = {
-      case Value(v: Out) =>
-        debug(s"out $v")
-        out(v)
-        before ! Pull()
-      case TracedValue(v: Out, original, output) =>
+      case Value(v: Out, original, output) =>
         debug(s"traced $v")
         output.success(v)
-        before ! Pull()
-      case Error(e) =>
-        out.error(e)
-        before ! Pull()
-      case TracedError(e, original) =>
-        ()
+        out(v, continue)
+      case Error(t, original, output) =>
+        output.failure(t)
+        out.error(t, continue)
+    }
+
+    private[this] def continue = {
+      lazy val x = before ! Pull()
+      () => { x }
     }
   }
 
@@ -99,7 +100,7 @@ package object actors {
     type In
     type Out
 
-    def f : In => Out
+    def f : In => Future[Out]
     def parallelism: Int
 
     private[this] var before : ActorRef = _
@@ -158,18 +159,38 @@ package object actors {
 
     type In
     type Out
-    def f : In => Out
-    private[this] var result: Content[_] = _
+    def f : In => Future[Out]
+    private[this] var result: Content[Out] = _
     import context._
 
     def receive = free
 
     def free : Receive = {
-      case c: Content[In] =>
-        debug(s"work $c")
-        result = c.map(f)
-        sender ! Free
-        become(finished)
+      case v @ Value(value: In, original, output) =>
+        val s = sender
+        try {
+          debug(s"worker $value")
+          f(value).onComplete {
+            case Success(newValue: Out) =>
+              debug(s"worker $value => $newValue")
+              continue(s, v.next[Out](newValue))
+            case Failure(t) =>
+              t.printStackTrace
+              continue(s, v.fail(t))
+          }
+        } catch {
+          case t: Throwable =>
+            continue(s, v.fail(t))
+        }
+
+      case e @ Error(t, original, output) =>
+        continue(sender, e)
+    }
+
+    private[this] def continue(sender: ActorRef, c: Content[Out]){
+      result = c
+      sender ! Free
+      become(finished)
     }
 
     def finished : Receive = {

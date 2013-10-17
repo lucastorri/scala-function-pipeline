@@ -1,41 +1,79 @@
 package co.torri.pipeline
 
 import co.torri.pipeline.actors._
-import concurrent.Promise
-import akka.actor.{Props, ActorRef}
+import concurrent.{Future, Promise}
+import akka.actor.{ActorSystem, Props, ActorRef}
+import concurrent.ExecutionContext.Implicits.global
 
 trait Pipeline[I, O] {
-  def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
-  def map[N](f: O => N) : Pipeline[I, N] = map(1)(f)
+  def forkM1[N1](parallelism: Int)(p1: Pipeline[O, N1]) : Pipeline[I, (O, N1)]
+  def fork[N1](p1: Pipeline[O, N1]) : Pipeline[I, (O, N1)] = forkM1(1)(p1)
 
-  def pipe() : FutureRunner[I, O]
-  def pipe(o: Output[O]) : CallbackRunner[I, O]
+  def forkM2[N1, N2](parallelism: Int)(p1: Pipeline[O, N1], p2: Pipeline[O, N2]) : Pipeline[I, (O, N1, N2)]
+  def fork[N1, N2](p1: Pipeline[O, N1], p2: Pipeline[O, N2]) : Pipeline[I, (O, N1, N2)] = forkM2(1)(p1, p2)
+
+  def mapM[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
+  def map[N](f: O => N) : Pipeline[I, N] = mapM(1)(f)
+
+  def pipe()(implicit system: ActorSystem) : FutureRunner[I, O]
+  def pipe(o: Output[O])(implicit system: ActorSystem) : CallbackRunner[I, O]
 }
 case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
 
-  def map[N](parallelism: Int)(f: O => N) : Pipeline[I, N] = {
+  def forkM1[N1](parallelism: Int)(p1: Pipeline[O, N1]) : Pipeline[I, (O, N1)] = {
+
+    val pipe1 = p1.pipe
+
+    addStep(parallelism) { o =>
+      for {
+        o1 <- pipe1(o)
+      } yield (o, o1)
+    }
+  }
+  def forkM2[N1, N2](parallelism: Int)(p1: Pipeline[O, N1], p2: Pipeline[O, N2]) : Pipeline[I, (O, N1, N2)] = {
+
+    val pipe1 = p1.pipe
+    val pipe2 = p2.pipe
+
+    addStep(parallelism) { o =>
+      for {
+        o1 <- pipe1(o)
+        o2 <- pipe2(o)
+      } yield (o, o1, o2)
+    }
+  }
+
+  def mapM[N](parallelism: Int)(f: O => N) : Pipeline[I, N] = {
+    addStep(parallelism) { o =>
+      try Future.successful(f(o))
+      catch { case t: Throwable => Future.failed(t) }
+    }
+  }
+
+  private[this] def addStep[N](parallelism: Int)(f: O => Future[N]) : Pipeline[I, N] = {
     Stage(Func(parallelism, f) :: stages)
   }
 
-  def pipe() : FutureRunner[I, O] = new FutureRunner[I, O] {
-    private[this] val start = runner(Output.noop[O])
+  def pipe()(implicit system: ActorSystem) : FutureRunner[I, O] = new FutureRunner[I, O] {
+    private[this] val start = runner(Output.noop[O])(system)
 
     def apply(v: I) = {
       val promise = Promise[O]()
-      start ! TracedValue(v, v, promise)
+      start ! Value(v, v, promise)
       promise.future
     }
   }
 
-  def pipe(output: Output[O]) : CallbackRunner[I, O] = new CallbackRunner[I, O] {
-    private[this] val start = runner(output)
+  def pipe(output: Output[O])(implicit system: ActorSystem) : CallbackRunner[I, O] = new CallbackRunner[I, O] {
+    private[this] val start = runner(output)(system)
 
     def apply(v: I) = {
-      start ! Value(v)
+      val promise = Promise[O]()
+      start ! Value(v, v, promise)
     }
   }
 
-  private[this] def runner(output: Output[O]) : ActorRef = {
+  private[this] def runner(output: Output[O])(system: ActorSystem) : ActorRef = {
     val start : ActorRef = system.actorOf(Props(creator = () => new Start {
       type In = I
     }))

@@ -2,25 +2,21 @@ package co.torri.pipeline
 
 import concurrent.Promise
 
-sealed trait Content[+C] {
-  def map[N](f: C => N) : Content[N]
+sealed trait Content[+V] {
+  def fail(t: Throwable) : Content[Nothing]
+  def next[N](n: N) : Content[N]
 }
-case class Value[V](v: V) extends Content[V] {
-  def map[N](f: V => N) : Content[N] =
-    try Value(f(v)) catch { case e: Exception => Error(e) }
+
+case class Value[V, Original, Output](v: V, original: Original, output: Promise[Output]) extends Content[V] {
+
+  override def fail(t: Throwable) : Content[Nothing] = Error(t, original, output)
+
+  override def next[N](n: N) : Content[N] =  Value(n, original, output)
 }
-case class Error(e: Exception) extends Content[Nothing] {
-  def map[N](f: Nothing => N) : Content[N] = this
-}
-case class TracedValue[V, I, O](v: V, original: I, output: Promise[O]) extends Content[V] {
-  def map[N](f: V => N) : Content[N] =
-    try TracedValue(f(v), original, output)
-    catch {
-      case e: Exception =>
-        output.failure(e)
-        TracedError(e, original)
-    }
-}
-case class TracedError[I](e: Exception, original: I) extends Content[Nothing] {
-  def map[N](f: Nothing => N) : Content[N] = this
+
+case class Error[Original, Output](t: Throwable, original: Original, output: Promise[Output]) extends Content[Nothing] {
+
+  override def fail(t: Throwable) : Content[Nothing] = this
+
+  override def next[N](n: N) : Content[N] = this
 }
