@@ -3,6 +3,7 @@ package co.torri.pipeline
 import io.Source
 import java.net.URLEncoder
 import org.json4s._
+import org.json4s.native.JsonMethods._
 
 object FullExample {
 
@@ -36,10 +37,7 @@ object FullExample {
     val content : Pipeline[String, WebsiteContent] = Pipeline[String]
       .mapM(4) { url =>
         try {
-          val size = Source.fromURL(url).size
-          //println(s"content $url = $size")
-
-          (url, size)
+          (url, Source.fromURL(url).size)
         } catch {
           case e: Exception =>
             (url, 0)
@@ -55,18 +53,16 @@ object FullExample {
         (url, Source.fromURL(s"http://api.sharedcount.com/?url=$encoded"))
       }
       .map { case (url, social) =>
+        val json = parse(social.mkString)
+        val facebookLikes = (json \ "Facebook" \ "like_count").extractOrElse[Int](0)
+        val googlePlusOne = (json \ "GooglePlusOne").extractOrElse[Int](0)
+        val tweets = (json \ "Twitter").extractOrElse[Int](0)
 
-        //println(social.mkString)
-        //val json = parse(social.mkString)
-        //val facebookLikes = (json \ "Facebook" \ "like_count").extract[Int]
-        //val googlePlusOne = (json \ "GooglePlusOne").extract[Int]
-        //val tweets = (json \ "Twitter").extract[Int]
-
-        WebsiteSocialInfo(url, /*facebookLikes*/ 0, /*googlePlusOne*/ 0, /*tweets*/ 0)
+        WebsiteSocialInfo(url, facebookLikes, googlePlusOne, tweets)
       }
 
     val mainPipeline = Pipeline[String]
-      .forkM2(4)(content, info)
+      .fork(4, content, info)
       .map { case (url, c, i) =>
 
         println(s"${url} = ${c.pageSize} bytes")
