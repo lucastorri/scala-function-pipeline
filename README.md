@@ -2,13 +2,13 @@
 
 Imagine you have a Scala Sequence, like:
 
-```
+```scala
 val seq = Seq(1,2,3,4,5)
 ```
 
 and you apply a few functions to it through `map`:
 
-```
+```scala
 seq
   .map { _.toString }
   .map { _ + "!" }
@@ -17,7 +17,7 @@ seq
 
 Scala makes it really easy to run it faster with parallel collections:
 
-```
+```scala
 seq
   .par
   .map { _.toString }
@@ -27,7 +27,7 @@ seq
 
 But what you get in the process of mapping all functions are several "copies" of that sequence in between:
 
-```
+```scala
 seq
   .map { _.toString }     // Seq("1", "2", "3", "4")
   .map { _ + "!" }        // Seq("1!", "2!", "3!", "4!", "5!")
@@ -41,7 +41,7 @@ For solving this, there are a few libraries like [scalaz-stream](https://github.
 
 For instance, let's say one of the steps is quite slow (step **#2**). For simplicity, I'll use a `sleep` call, but that can be network access, etc:
 
-```
+```scala
 seq
   .par
   .map { _.toString }                        // #1
@@ -53,7 +53,7 @@ seq
 
 What this library enables you to do is to fine tune each step and define a parallelism level it should be run with:
 
-```
+```scala
 val p = Pipeline[Int]
   .map { _.toString }
   .mapM(5) { s => Thread.sleep(3000); s + "!" }
@@ -66,7 +66,7 @@ For running the pipeline, there are two possible ways:
 
 * A fire and forget style, where a callback object will be called when the computation of the value is finished
 
-```
+```scala
 val cr = p.pipe(new Output[String] {
   def apply(s: String) = println(s"finished $s")
   def error(e: Exception) = e.printStackTrace
@@ -76,7 +76,7 @@ val cr = p.pipe(new Output[String] {
 
 * A `Future` returning call:
 
-```
+```scala
 val fr = p.pipe
 val f = fr(100)
 f.onSuccess { case v => println(s"success $v") }
@@ -84,7 +84,7 @@ f.onSuccess { case v => println(s"success $v") }
 
 ### Concatenating Pipelines
 
-```
+```scala
 val p1 = Pipeline[String]
   .mapM(4) { s =>
     Thread.sleep(1000)
@@ -112,11 +112,27 @@ val p = Pipeline[Int]
 List(1,2,3,4,5).foreach(p.apply)
 ```
 
+### Other Functionalities
+
+* Fork
+* Fork/Join
+* Join (Start)
+* Join (in the middle of the pipeline)
+
+
+## Examples
+
+* [Basic Example](src/test/scala/co/torri/pipeline/examples/Example.scala)
+* [Fork/Join example getting websites information](src/test/scala/co/torri/pipeline/examples/FullExample.scala)
+* [Join on Start of Pipeline](src/test/scala/co/torri/pipeline/examples/JoinExample.scala)
+* [Crazy example displaying several features at once](src/test/scala/co/torri/pipeline/examples/Fork_ForkJoin_JoinExample.scala)
+
+
 ## What happens
 
 By doing the following: 
 
-```
+```scala
 val p = Pipeline[Int]
   .map { _.toString }
   .map { _ + "!" }
@@ -129,7 +145,7 @@ We are creating a pipeline with 3 stages. Let's say, F1, F2, and F3.
 
 Let's say we pass 5 different values in (1, 2, 3, 4, 5):
 
-```
+```scala
 (1 to 5).foreach(fr.apply)
 ```
 
@@ -186,4 +202,5 @@ Once F1 has any value ready, it pushes it to the F2 Supervisor, that than forwar
 ## TODO
 
 * The workers could be mapped to remote actors using Akka, making it a distributed framework;
-* Each stage could monitor the time taken by each execution, how long does it waits to be passed to the next step, etc, so it could automatically adjust the parallelism level.
+* Each stage could monitor the time taken by each execution, how long does it waits to be passed to the next step, etc, so it could automatically adjust the parallelism level;
+* Create a small web framework were actions are all based on Pipelines.
