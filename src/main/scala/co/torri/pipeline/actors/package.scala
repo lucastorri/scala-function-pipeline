@@ -18,10 +18,43 @@ package object actors {
   }
   case class Push(receiver: ActorRef)
 
+  case class JoinStart[Out, Final](f: () => Future[Out])(implicit opts: Opts) extends Actor {
 
-  abstract class Start()(implicit opts: Opts) extends Actor {
+    private[this] var after: ActorRef = _
 
-    type In
+    import context._
+
+    def receive = {
+      case Bind(stages) =>
+        debug(s"Start: Bind($stages)")
+        after = stages.head
+        after ! Bind(stages.tail)
+        become(up)
+    }
+
+    def up : Receive = {
+      case Pull(qty) =>
+        debug(s"Start: Pull($qty)")
+        (1 to qty).foreach { _ =>
+          try {
+            f().onComplete {
+              case Success(v) =>
+                after ! Value[Out, Null, Final](v, null, Promise())
+              case Failure(t) =>
+                after ! Error[Null, Final](t, null, Promise())
+            }
+          } catch {
+            case t: Throwable =>
+              after ! Error[Null, Final](t, null, Promise())
+          }
+        }
+    }
+
+  }
+
+
+  case class Start[In]()(implicit opts: Opts) extends Actor {
+
     private[this] var after: ActorRef = _
     private[this] var values = mutable.ListBuffer.empty[Content[In]]
     private[this] var tokens = 0
@@ -109,13 +142,7 @@ package object actors {
 
   }
 
-  abstract class Supervisor(id: Int)(implicit opts: Opts) extends Actor {
-
-    type In
-    type Out
-
-    def f : Content[In] => Future[Out]
-    def parallelism: Int
+  case class Supervisor[In, Out](id: Int, f: Content[In] => Future[Out], parallelism: Int)(implicit opts: Opts) extends Actor {
 
     private[this] var before : ActorRef = _
     private[this] var after : ActorRef = _
@@ -131,11 +158,7 @@ package object actors {
         before = sender
         after = stages.head
         after ! Bind(stages.tail)
-        waiting = mutable.ListBuffer.range(0, parallelism).map(workerId => actorOf(Props(creator = () => new Worker(workerId, id) {
-          type In = Supervisor.this.In
-          type Out = Supervisor.this.Out
-          val f = Supervisor.this.f
-        })))
+        waiting = mutable.ListBuffer.range(0, parallelism).map(workerId => actorOf(Props(creator = () => Worker[In, Out](workerId, id, f))))
         become(free)
         before ! Pull(parallelism)
     }
@@ -170,11 +193,8 @@ package object actors {
 
   }
 
-  abstract class Worker(id: Int, supervisorId: Int)(implicit opts: Opts) extends Actor {
+  case class Worker[In, Out](id: Int, supervisorId: Int, f : Content[In] => Future[Out])(implicit opts: Opts) extends Actor {
 
-    type In
-    type Out
-    def f : Content[In] => Future[Out]
     private[this] var result: Content[Out] = _
     import context._
 

@@ -11,10 +11,6 @@ object ForeverExample {
 
   def main(args: Array[String]) = {
 
-    // Fork: OK
-    // ForkJoin: OK
-    // Join: ???
-
     def nop(a: Any) = {}
     def p(a: Any) = println(s">>> $a")
 
