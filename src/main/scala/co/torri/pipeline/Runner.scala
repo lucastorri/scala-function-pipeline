@@ -9,6 +9,7 @@ trait CallbackRunner[I, O] extends Runner[I, O] {
 trait FutureRunner[I, O] extends Runner[I, O] {
   def apply(i: I) : Future[O]
 }
-trait ContinueRunner[I, O] extends Runner[I, O] {
+trait NextRunner[I, O] extends Runner[I, O] {
   def apply(i: I)
+  def next() : Future[O]
 }
