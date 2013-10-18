@@ -6,6 +6,7 @@ import akka.actor.ActorSystem
 object Example {
 
   def main(args: Array[String]) = {
+    /*
     val p = Pipeline[Int]
       .mapM(10) { i =>
         Thread.sleep(3000)
@@ -20,12 +21,12 @@ object Example {
       def apply(s: String) = println(s"chegou $s")
       def error(t: Throwable) = t.printStackTrace()
     }
-    val ar = p.pipe(a)
+    val ar = p.future(a)
     (0 until 50).foreach(ar.apply)
 
     {
       implicit val system = ActorSystem()
-      val fr = p.pipe
+      val fr = p.future
       val f = fr(100)
       f.onSuccess { case v => println(s"success $v") }
     }
@@ -34,8 +35,9 @@ object Example {
       def apply(s: String, continue: () => Unit) = { println(s); continue() }
       def error(t: Throwable, continue: () => Unit) = { t.printStackTrace(); continue() }
     }
-    val or = p.pipe(o)(ActorSystem())
+    val or = p.future(o)(ActorSystem())
     (0 until 50).foreach(or.apply)
+    */
   }
 
 }

@@ -2,8 +2,8 @@ package co.torri.pipeline
 
 import akka.actor.{Props, ActorRef, Actor}
 import collection.mutable
-import concurrent.Future
-import util.{Failure, Success}
+import concurrent.{Promise, Future}
+import util.{Try, Failure, Success}
 
 package object actors {
 
@@ -19,7 +19,7 @@ package object actors {
   case class Push(receiver: ActorRef)
 
 
-  trait Start extends Actor {
+  abstract class Start()(implicit opts: Opts) extends Actor {
 
     type In
     private[this] var after: ActorRef = _
@@ -30,7 +30,7 @@ package object actors {
 
     def receive = {
       case Bind(stages) =>
-        debug("bind start")
+        debug(s"Start: Bind($stages)")
         after = stages.head
         after ! Bind(stages.tail)
         become(up)
@@ -38,11 +38,11 @@ package object actors {
 
     def up : Receive = {
       case Pull(qty) =>
-        debug(s"next start $qty")
+        debug(s"Start: Pull($qty)")
         tokens += qty
         pushValues()
       case v: Content[In] =>
-        debug(s"in $v")
+        debug(s"Start: Content($v)")
         values += v
         pushValues()
     }
@@ -57,50 +57,64 @@ package object actors {
     }
   }
 
-  trait End extends Actor {
+  class WaitEnd[O]()(implicit opts: Opts) extends Actor {
 
-    type Out
-    private[this] var out: Output[Out] = Output.noop
+    private[this] var before: ActorRef = _
+    private[this] var waiting = mutable.ListBuffer.empty[Promise[O]]
+
+    import context._
+
+    def receive = {
+      case Bind(stages) =>
+        debug(s"WaitEnd: receive/Bind($stages)")
+        before = sender
+        become(up)
+    }
+
+    def up: Receive = {
+      case p: Promise[O] =>
+        debug(s"WaitEnd: up/Promise($p)")
+        waiting += p
+        before ! Pull()
+      case c: Content[O] =>
+        debug(s"WaitEnd: up/Content($c)")
+        waiting.head.complete(c.toTry)
+        waiting = waiting.drop(1)
+    }
+
+  }
+
+  class CommitEnd()(implicit opts: Opts) extends Actor {
+
     private[this] var before: ActorRef = _
 
     import context._
 
     def receive = {
-      case o: Output[Out] =>
-        debug("set out")
-        out = o
-        become(bindable)
-    }
-
-    def bindable : Receive = {
       case Bind(stages) =>
+        debug(s"CommitEnd: Bind($stages)")
         before = sender
         before ! Pull()
         become(up)
     }
 
     def up : Receive = {
-      case Value(v: Out, original, output) =>
-        debug(s"traced $v")
-        output.success(v)
-        out(v, continue)
-      case Error(t, original, output) =>
-        output.failure(t)
-        out.error(t, continue)
+      case c: Content[_] =>
+        debug(s"CommitEnd: Content($c)")
+        c.commit()
+        before ! Pull()
+      case m =>
+        debug(s"CommitEnd: Unknown($m)")
     }
 
-    private[this] def continue = {
-      lazy val x = before ! Pull()
-      () => { x }
-    }
   }
 
-  trait Supervisor extends Actor {
+  abstract class Supervisor(id: Int)(implicit opts: Opts) extends Actor {
 
     type In
     type Out
 
-    def f : In => Future[Out]
+    def f : Content[In] => Future[Out]
     def parallelism: Int
 
     private[this] var before : ActorRef = _
@@ -113,11 +127,11 @@ package object actors {
 
     def receive = {
       case Bind(stages) =>
-        debug("bind", stages)
+        debug(s"Supervisor#$id: Bind($stages)")
         before = sender
         after = stages.head
         after ! Bind(stages.tail)
-        waiting = mutable.ListBuffer.fill(parallelism)(actorOf(Props(creator = () => new Worker {
+        waiting = mutable.ListBuffer.range(0, parallelism).map(workerId => actorOf(Props(creator = () => new Worker(workerId, id) {
           type In = Supervisor.this.In
           type Out = Supervisor.this.Out
           val f = Supervisor.this.f
@@ -128,18 +142,19 @@ package object actors {
 
     def free : Receive = {
       case Pull(qty) =>
-        debug(s"next $qty")
+        debug(s"Supervisor#$id: Pull($qty)")
         tokens += qty
         pushWork()
       case Free =>
-        debug(s"free")
+        debug(s"Supervisor#$id: Free($sender)")
         finished += sender
         pushWork()
       case Done =>
-        debug(s"done")
+        debug(s"Supervisor#$id: Done($sender)")
         before ! Pull()
         waiting += sender
       case c: Content[In] =>
+        debug(s"Supervisor#$id: Content($c)")
         waiting.head ! c
         waiting = waiting.tail
     }
@@ -155,36 +170,33 @@ package object actors {
 
   }
 
-  trait Worker extends Actor {
+  abstract class Worker(id: Int, supervisorId: Int)(implicit opts: Opts) extends Actor {
 
     type In
     type Out
-    def f : In => Future[Out]
+    def f : Content[In] => Future[Out]
     private[this] var result: Content[Out] = _
     import context._
 
     def receive = free
 
     def free : Receive = {
-      case v @ Value(value: In, original, output) =>
+      case c: Content[In] =>
         val s = sender
         try {
-          debug(s"worker $value")
-          f(value).onComplete {
+          debug(s"Worker#$supervisorId-$id: Content($c)")
+          f(c).onComplete {
             case Success(newValue: Out) =>
-              debug(s"worker $value => $newValue")
-              continue(s, v.next[Out](newValue))
+              debug(s"Worker#$supervisorId-$id: Mapped($c => $newValue)")
+              continue(s, c.next[Out](newValue))
             case Failure(t) =>
               t.printStackTrace
-              continue(s, v.fail(t))
+              continue(s, c.fail(t))
           }
         } catch {
           case t: Throwable =>
-            continue(s, v.fail(t))
+            continue(s, c.fail(t))
         }
-
-      case e @ Error(t, original, output) =>
-        continue(sender, e)
     }
 
     private[this] def continue(sender: ActorRef, c: Content[Out]){
@@ -195,7 +207,7 @@ package object actors {
 
     def finished : Receive = {
       case Push(receiver) =>
-        debug(s"push $receiver")
+        debug(s"Worker#$supervisorId-$id: Push($receiver)")
         receiver ! result
         sender ! Done
         result = null

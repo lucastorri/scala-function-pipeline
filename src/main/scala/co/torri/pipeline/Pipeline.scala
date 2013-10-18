@@ -2,76 +2,78 @@ package co.torri.pipeline
 
 import co.torri.pipeline.actors._
 import concurrent.{ExecutionContextExecutor, Future, Promise}
-import akka.actor.{ActorSystem, Props, ActorRef}
+import akka.actor.{Actor, ActorSystem, Props, ActorRef}
+import util.Try
 
 trait Pipeline[I, O] {
-  def fork(p1: Pipeline[O, _], ps: Pipeline[O, _]*)(implicit system: ActorSystem) : Pipeline[I, O]
+  def fork(r1: Runner[O, _], rs: Runner[O, _]*)(implicit system: ActorSystem) : Pipeline[I, O]
 
-  def join[N1](r1: NextRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = join(1, r1)
-  def join[N1](parallelism: Int, r1: NextRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
+  def join[N1](r1: FutureRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = join(1, r1)
+  def join[N1](parallelism: Int, r1: FutureRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
 
-  def join[N1, N2](r1: NextRunner[_, N1], r2: NextRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = join(1, r1, r2)
-  def join[N1, N2](parallelism: Int, r1: NextRunner[_, N1], r2: NextRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
+  def join[N1, N2](r1: FutureRunner[_, N1], r2: FutureRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = join(1, r1, r2)
+  def join[N1, N2](parallelism: Int, r1: FutureRunner[_, N1], r2: FutureRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
 
-  def forkJoin[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
-  def forkJoin[N1](p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = forkJoin(1, p1)
+  def forkJoin[N1](parallelism: Int, f1: FutureRunner[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
+  def forkJoin[N1](f1: FutureRunner[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = forkJoin(1, f1)
 
-  def forkJoin[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
-  def forkJoin[N1, N2](p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = forkJoin(1, p1, p2)
+  def forkJoin[N1, N2](parallelism: Int, f1: FutureRunner[O, N1], f2: FutureRunner[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
+  def forkJoin[N1, N2](f1: FutureRunner[O, N1], f2: FutureRunner[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = forkJoin(1, f1, f2)
 
   def mapM[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
   def map[N](f: O => N) : Pipeline[I, N] = mapM(1)(f)
 
-  def pipe()(implicit system: ActorSystem) : FutureRunner[I, O]
-  def pipe(o: Output[O])(implicit system: ActorSystem) : CallbackRunner[I, O]
+  def future()(implicit system: ActorSystem) : FutureRunner[I, O]
+  def foreach(f: Try[O] => Unit)(implicit system: ActorSystem) : Runner[I, O] = foreachM(1)(f)
+  def foreachM(parallelism: Int)(f: Try[O] => Unit)(implicit system: ActorSystem) : Runner[I, O]
 }
-case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
+case class Stage[I, O] private[pipeline](stages: List[Func])(implicit opts: Opts) extends Pipeline[I, O] {
 
-  def fork(p1: Pipeline[O, _], ps: Pipeline[O, _]*)(implicit system: ActorSystem) : Pipeline[I, O] = {
-    val pipes = (p1 :: ps.toList).map(_.pipe)
+  def fork(r1: Runner[O, _], rs: Runner[O, _]*)(implicit system: ActorSystem) : Pipeline[I, O] = {
+    val runners = (r1 :: rs.toList)
 
     addStep(1) { o =>
-      pipes.foreach(_(o))
+      runners.foreach(_(o))
       Future.successful(o)
     }
   }
 
-  def join[N1](parallelism: Int, r1: NextRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
+  def join[N1](parallelism: Int, r1: FutureRunner[_, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
     addStep(parallelism) { o =>
+      val n1 = r1.next
       for {
-        o1 <- r1.next
+        o1 <- n1
       } yield (o, o1)
     }
   }
 
-  def join[N1, N2](parallelism: Int, r1: NextRunner[_, N1], r2: NextRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
+  def join[N1, N2](parallelism: Int, r1: FutureRunner[_, N1], r2: FutureRunner[_, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
     addStep(parallelism) { o =>
+      val n1 = r1.next
+      val n2 = r2.next
       for {
-        o1 <- r1.next
-        o2 <- r2.next
+        o1 <- n1
+        o2 <- n2
       } yield (o, o1, o2)
     }
   }
 
-  def forkJoin[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
-
-    val pipe1 = p1.pipe
+  def forkJoin[N1](parallelism: Int, f1: FutureRunner[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
 
     addStep(parallelism) { o =>
+      f1(o)
       for {
-        o1 <- pipe1(o)
+        o1 <- f1.next
       } yield (o, o1)
     }
   }
-  def forkJoin[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
-
-    val pipe1 = p1.pipe
-    val pipe2 = p2.pipe
-
+  def forkJoin[N1, N2](parallelism: Int, f1: FutureRunner[O, N1], f2: FutureRunner[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
     addStep(parallelism) { o =>
+      f1(o)
+      f2(o)
       for {
-        o1 <- pipe1(o)
-        o2 <- pipe2(o)
+        o1 <- f1.next
+        o2 <- f2.next
       } yield (o, o1, o2)
     }
   }
@@ -83,12 +85,38 @@ case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I,
     }
   }
 
-  private[this] def addStep[N](parallelism: Int)(f: O => Future[N]) : Pipeline[I, N] = {
-    Stage(Func(parallelism, f) :: stages)
+  private[Pipeline] def addStep[N](parallelism: Int)(f: O => Future[N]) : Pipeline[I, N] = {
+    Stage(Func.fromValue(parallelism, f) :: stages)
   }
 
-  def pipe()(implicit system: ActorSystem) : FutureRunner[I, O] = new FutureRunner[I, O] {
-    private[this] val start = runner(Output.noop[O])(system)
+  def future()(implicit system: ActorSystem) : FutureRunner[I, O] = new FutureRunner[I, O] {
+    private[this] val (start, end) = runner(stages, () => new WaitEnd[O]())
+
+    def apply(v: I) : Future[O] = {
+      val promise = Promise[O]()
+      start ! Value(v, v, promise)
+      promise.future
+    }
+
+    def next() : Future[O] = {
+      debug(s"FutureRunner: next()")
+      val promise = Promise[O]()
+      end ! promise
+      promise.future
+    }
+  }
+
+  def foreachM(parallelism: Int)(f: Try[O] => Unit)(implicit system: ActorSystem) : Runner[I, O] = new Runner[I, O] {
+
+    private[this] val (start, _) = {
+
+      val extra = Func(parallelism) { c =>
+        f(c.toTry)
+        c.toFuture
+      }
+
+      runner(extra :: stages, () => new CommitEnd)
+    }
 
     def apply(v: I) = {
       val promise = Promise[O]()
@@ -97,25 +125,14 @@ case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I,
     }
   }
 
-  def pipe(output: Output[O])(implicit system: ActorSystem) : CallbackRunner[I, O] = new CallbackRunner[I, O] {
-    private[this] val start = runner(output)(system)
-
-    def apply(v: I) = {
-      val promise = Promise[O]()
-      start ! Value(v, v, promise)
-    }
-  }
-
-  private[this] def runner(output: Output[O])(system: ActorSystem) : ActorRef = {
+  private[this] def runner(stages: List[Func], endActor: () => Actor)(implicit system: ActorSystem) : (ActorRef, ActorRef) = {
     val start : ActorRef = system.actorOf(Props(creator = () => new Start {
       type In = I
     }))
 
-    val end : ActorRef = system.actorOf(Props(creator = () => new End {
-      type Out = O
-    }))
+    val end : ActorRef = system.actorOf(Props(creator = endActor))
 
-    def supervisor(func: Func) : ActorRef = system.actorOf(Props(creator = () => new Supervisor {
+    def supervisor(func: Func, id: Int) : ActorRef = system.actorOf(Props(creator = () => new Supervisor(stages.size - id) {
       def parallelism: Int = func.p
 
       def f = func.f
@@ -124,13 +141,29 @@ case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I,
       type Out = func.Out
     }))
 
-    val actors : List[ActorRef] = (end :: stages.map(supervisor)).reverse
-    end ! output
+    val sup = (supervisor _).tupled
+
+    val actors : List[ActorRef] = (end :: stages.zipWithIndex.map(sup)).reverse
     start ! Bind(actors)
-    start
+    (start, end)
   }
 
 }
 object Pipeline {
-  def apply[I]() : Pipeline[I, I] = new Stage(List())
+  val defaultOpts = Opts()
+
+  def apply[I]()(implicit opts: Opts = defaultOpts) : Pipeline[I, I] = new Stage(List())
+
+// TODO
+// def apply[O1](r1: FutureRunner[_, O1])(implicit opts: Opts = defaultOpts) : Pipeline[O1, O1] = apply(1, r1)
+//  def apply[O1](parallelism: Int, r1: FutureRunner[_, O1])(implicit opts: Opts = defaultOpts) : Pipeline[O1, O1] = {
+//    apply[O1]()
+//  }
+//
+//  def apply[O1, O2](r1: FutureRunner[_, O1], r2: FutureRunner[_, O2])(implicit opts: Opts = defaultOpts) : Pipeline[(O1, O2), (O1, O2)] = apply(1, r1, r2)
+//  def apply[O1, O2](parallelism: Int, r1: FutureRunner[_, O1], r2: FutureRunner[_, O2])(implicit opts: Opts = defaultOpts) : Pipeline[(O1, O2), (O1, O2)] = {
+//    apply[(O1, O2)]()
+//  }
 }
+
+case class Opts(debug: Boolean = false)

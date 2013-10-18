@@ -35,6 +35,7 @@ object FullExample {
       "http://www.amazon.com/"
     )
 
+    /*
     val content : Pipeline[String, WebsiteContent] = Pipeline[String]
       .mapM(4) { url =>
         try (url, Source.fromURL(url).size)
@@ -71,6 +72,7 @@ object FullExample {
       .pipe
 
     websites.foreach(mainPipeline.apply)
+    */
   }
 
 }
