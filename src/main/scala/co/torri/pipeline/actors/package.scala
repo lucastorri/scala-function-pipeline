@@ -3,7 +3,7 @@ package co.torri.pipeline
 import akka.actor.{Props, ActorRef, Actor}
 import collection.mutable
 import concurrent.{Promise, Future}
-import util.{Try, Failure, Success}
+import util.{Failure, Success}
 
 package object actors {
 

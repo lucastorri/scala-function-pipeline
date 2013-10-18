@@ -1,13 +1,11 @@
 package co.torri.pipeline
 
-import org.json4s.DefaultFormats
 
 object JoinExample {
 
   def main(args: Array[String]) = {
 
     implicit val execution = scala.concurrent.ExecutionContext.Implicits.global
-    implicit val formats = DefaultFormats
 
     val p1 = Pipeline[String]
       .map(_ + "!")

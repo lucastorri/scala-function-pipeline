@@ -1,11 +1,8 @@
 package co.torri.pipeline
 
-import org.json4s.DefaultFormats
-
-object ForeverExample {
+object Fork_ForkJoin_JoinExample {
 
   implicit val execution = scala.concurrent.ExecutionContext.Implicits.global
-  implicit val formats = DefaultFormats
 
   type X = List[Symbol]
 
@@ -37,7 +34,7 @@ object ForeverExample {
       .forkJoin(forkJoin1, forkJoin2)
       .foreach(p)
 
-    (1 to 3).foreach { i =>
+    (1 to 30).foreach { i =>
       val l = List(Symbol(i.toString))
       join(l)
       start(l)
