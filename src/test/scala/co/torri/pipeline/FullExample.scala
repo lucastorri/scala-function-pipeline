@@ -59,7 +59,7 @@ object FullExample {
       }
 
     val mainPipeline = Pipeline[String]
-      .fork(4, content, info)
+      .forkJoin(4, content, info)
       .map { case (url, c, i) =>
 
         println(s"${url} = ${c.pageSize} bytes")

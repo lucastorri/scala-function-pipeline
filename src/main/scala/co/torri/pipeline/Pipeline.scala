@@ -5,11 +5,13 @@ import concurrent.{ExecutionContextExecutor, Future, Promise}
 import akka.actor.{ActorSystem, Props, ActorRef}
 
 trait Pipeline[I, O] {
-  def fork[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
-  def fork[N1](p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = fork(1, p1)
+  def fork(p1: Pipeline[O, _], ps: Pipeline[O, _]*) : Pipeline[I, O]
 
-  def fork[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
-  def fork[N1, N2](p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = fork(1, p1, p2)
+  def forkJoin[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)]
+  def forkJoin[N1](p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = forkJoin(1, p1)
+
+  def forkJoin[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)]
+  def forkJoin[N1, N2](p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = forkJoin(1, p1, p2)
 
   def mapM[N](parallelism: Int)(f: O => N) : Pipeline[I, N]
   def map[N](f: O => N) : Pipeline[I, N] = mapM(1)(f)
@@ -19,7 +21,16 @@ trait Pipeline[I, O] {
 }
 case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I, O] {
 
-  def fork[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
+  def fork(p1: Pipeline[O, _], ps: Pipeline[O, _]*) : Pipeline[I, O] = {
+    val pipes = (p1 :: ps.toList).map(_.pipe)
+
+    addStep(1) { o =>
+      pipes.foreach(_(o))
+      Future.successful(o)
+    }
+  }
+
+  def forkJoin[N1](parallelism: Int, p1: Pipeline[O, N1])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1)] = {
 
     val pipe1 = p1.pipe
 
@@ -29,7 +40,7 @@ case class Stage[I, O] private[pipeline](stages: List[Func]) extends Pipeline[I,
       } yield (o, o1)
     }
   }
-  def fork[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
+  def forkJoin[N1, N2](parallelism: Int, p1: Pipeline[O, N1], p2: Pipeline[O, N2])(implicit exec: ExecutionContextExecutor) : Pipeline[I, (O, N1, N2)] = {
 
     val pipe1 = p1.pipe
     val pipe2 = p2.pipe
