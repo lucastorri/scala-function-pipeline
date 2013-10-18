@@ -67,19 +67,16 @@ For running the pipeline, there are two possible ways:
 * A fire and forget style, where a callback object will be called when the computation of the value is finished
 
 ```scala
-val cr = p.pipe(new Output[String] {
-  def apply(s: String) = println(s"finished $s")
-  def error(e: Exception) = e.printStackTrace
-})
+val cr = p.foreach(println)
 (0 until 10).foreach(cr.apply))
 ```
 
 * A `Future` returning call:
 
 ```scala
-val fr = p.pipe
+val fr = p.future
 val f = fr(100)
-f.onSuccess { case v => println(s"success $v") }
+f.onSuccess { v => println(s"success $v") }
 ```
 
 ### Concatenating Pipelines
@@ -90,24 +87,28 @@ val p1 = Pipeline[String]
     Thread.sleep(1000)
     s"hi $s"
   }
+  .future
 
 val p2 = Pipeline[String]
   .mapM(4) { s =>
     Thread.sleep(1000)
     s"bye $s"
   }
+  .future
 
 val p = Pipeline[Int]
   .map { i =>
     i.toString
   }
-  .fork(4, p1, p2)
-  .map { case (str, hiStr, byeStr) =>
-  	println(str)
-  	println(hiStr)
-  	println(byeStr)
+  .forkJoin(4, p1, p2)
+  .foreach { 
+    case Success((str, hiStr, byeStr)) =>
+    	println(str)
+    	println(hiStr)
+    	println(byeStr)
+    case Failure(t) =>
+      t.printStackTrace
   }
-  .pipe
   
 List(1,2,3,4,5).foreach(p.apply)
 ```
@@ -138,7 +139,7 @@ val p = Pipeline[Int]
   .map { _ + "!" }
   .map { "hi #" + _ }
   
-val fr = p.pipe
+val fr = p.future
 ```
 
 We are creating a pipeline with 3 stages. Let's say, F1, F2, and F3.
