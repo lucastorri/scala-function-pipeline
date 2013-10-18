@@ -206,11 +206,10 @@ package object actors {
         try {
           debug(s"Worker#$supervisorId-$id: Content($c)")
           f(c).onComplete {
-            case Success(newValue: Out) =>
+            case Success(newValue) =>
               debug(s"Worker#$supervisorId-$id: Mapped($c => $newValue)")
               continue(s, c.next[Out](newValue))
             case Failure(t) =>
-              t.printStackTrace
               continue(s, c.fail(t))
           }
         } catch {

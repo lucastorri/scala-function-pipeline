@@ -1,12 +1,12 @@
 package co.torri.pipeline
 
-import scala.concurrent.ExecutionContext.Implicits.global
-import akka.actor.ActorSystem
 
 object Example {
 
+  implicit val execution = scala.concurrent.ExecutionContext.Implicits.global
+
   def main(args: Array[String]) = {
-    /*
+
     val p = Pipeline[Int]
       .mapM(10) { i =>
         Thread.sleep(3000)
@@ -16,28 +16,9 @@ object Example {
       .map { s =>
         s + "!"
       }
+      .foreach(println)
 
-    val a = new AutoOutput[String] {
-      def apply(s: String) = println(s"chegou $s")
-      def error(t: Throwable) = t.printStackTrace()
-    }
-    val ar = p.future(a)
-    (0 until 50).foreach(ar.apply)
-
-    {
-      implicit val system = ActorSystem()
-      val fr = p.future
-      val f = fr(100)
-      f.onSuccess { case v => println(s"success $v") }
-    }
-
-    val o = new Output[String] {
-      def apply(s: String, continue: () => Unit) = { println(s); continue() }
-      def error(t: Throwable, continue: () => Unit) = { t.printStackTrace(); continue() }
-    }
-    val or = p.future(o)(ActorSystem())
-    (0 until 50).foreach(or.apply)
-    */
+    (1 to 30).foreach(p.apply)
   }
 
 }

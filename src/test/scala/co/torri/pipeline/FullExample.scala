@@ -4,6 +4,7 @@ import io.Source
 import java.net.URLEncoder
 import org.json4s._
 import org.json4s.native.JsonMethods._
+import util.Success
 
 object FullExample {
 
@@ -35,17 +36,16 @@ object FullExample {
       "http://www.amazon.com/"
     )
 
-    /*
-    val content : Pipeline[String, WebsiteContent] = Pipeline[String]
+    val content = Pipeline[String]()
       .mapM(4) { url =>
-        try (url, Source.fromURL(url).size)
-        catch { case e: Exception => (url, 0) }
+        (url, try Source.fromURL(url).size catch { case e: Exception => 0 })
       }
       .map { case (url, content) =>
         WebsiteContent(url, content)
       }
+      .future
 
-    val info : Pipeline[String, WebsiteSocialInfo] = Pipeline[String]
+    val info = Pipeline[String]
       .mapM(4) { url =>
         val encoded = URLEncoder.encode(url, "utf8")
         (url, Source.fromURL(s"http://api.sharedcount.com/?url=$encoded"))
@@ -58,21 +58,22 @@ object FullExample {
 
         WebsiteSocialInfo(url, facebookLikes, googlePlusOne, tweets)
       }
+      .future
 
     val mainPipeline = Pipeline[String]
       .forkJoin(4, content, info)
-      .map { case (url, c, i) =>
+      .foreach {
+        case Success((url, c, i)) =>
+          println(s"${url} = ${c.pageSize} bytes")
+          println(s"\tFacebook Likes: ${i.facebookLikes}")
+          println(s"\tGoogle +1: ${i.googlePlusOne}")
+          println(s"\tTweets: ${i.tweets}")
 
-        println(s"${url} = ${c.pageSize} bytes")
-        println(s"\tFacebook Likes: ${i.facebookLikes}")
-        println(s"\tGoogle +1: ${i.googlePlusOne}")
-        println(s"\tTweets: ${i.tweets}")
-
+        case f =>
+          println(f)
       }
-      .pipe
 
     websites.foreach(mainPipeline.apply)
-    */
   }
 
 }
