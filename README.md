@@ -204,4 +204,5 @@ Once F1 has any value ready, it pushes it to the F2 Supervisor, that than forwar
 
 * The workers could be mapped to remote actors using Akka, making it a distributed framework;
 * Each stage could monitor the time taken by each execution, how long does it waits to be passed to the next step, etc, so it could automatically adjust the parallelism level;
-* Create a small web framework were actions are all based on Pipelines.
+* Create a small web framework were actions are all based on Pipelines;
+* Check how is it similar/compares to [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/).
